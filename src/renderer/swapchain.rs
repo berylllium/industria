@@ -3,19 +3,20 @@ use super::vkcontext::{VkContext, QueueFamilyIndices};
 use super::utility::create_image_view;
 
 pub struct Swapchain {
-    image_views: Vec<vk::ImageView>,
-    images: Vec<vk::Image>,
+    pub out_of_date: bool,
 
-    swapchain_properties: SwapchainProperties,
+    pub image_views: Vec<vk::ImageView>,
+    pub images: Vec<vk::Image>,
 
-    handle: vk::SwapchainKHR,
+    pub swapchain_properties: SwapchainProperties,
+
+    pub handle: vk::SwapchainKHR,
 }
 
 impl Swapchain {
     pub fn new(
         vkcontext: &VkContext,
         queue_family_indices: QueueFamilyIndices,
-        dimensions: [u32; 2],
     ) -> Self {
         let details = SwapchainSupportDetails::query(
             vkcontext.physical_device,
@@ -23,7 +24,7 @@ impl Swapchain {
             vkcontext.surface_khr
         );
 
-        let properties = details.get_ideal_swapchain_properties(dimensions);
+        let properties = details.get_ideal_swapchain_properties();
 
         let format = properties.format;
         let present_mode = properties.present_mode;
@@ -95,6 +96,7 @@ impl Swapchain {
             .collect::<Vec<_>>();
 
         Self {
+            out_of_date: false,
             image_views,
             images,
             swapchain_properties: properties,
@@ -102,13 +104,74 @@ impl Swapchain {
         }
     }
 
-    pub fn free(&self, vkcontext: &VkContext) {
+    pub fn destroy(&self, vkcontext: &VkContext) {
         // Free image views.
         for image_view in self.image_views.iter() {
             unsafe { vkcontext.device.destroy_image_view(*image_view, None) };
         }
 
         unsafe { vkcontext.loaders.swapchain.destroy_swapchain(self.handle, None) };
+    }
+}
+
+impl Swapchain {
+    pub fn acquire_next_image_index(
+        &mut self,
+        vkcontext: &VkContext,
+        image_available_semaphore: vk::Semaphore
+    ) -> Option<u32> {
+        let result = unsafe {
+            vkcontext.loaders.swapchain.acquire_next_image(
+                self.handle,
+                std::u64::MAX,
+                image_available_semaphore,
+                vk::Fence::null())
+        };
+
+        let image_index = match result {
+            Ok((image_index, _)) => image_index,
+            Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+                log::debug!("Swapchain out of date.");
+                self.out_of_date = true;
+                return None;
+            },
+            _ => return None
+        };
+
+        Some(image_index)
+    }
+
+    pub fn present(
+        &mut self,
+        vkcontext: &VkContext,
+        render_complete_semaphore: vk::Semaphore,
+        present_image_index: u32
+    ) -> bool {
+        let wait_semaphores = [render_complete_semaphore];
+        let swapchains = [self.handle];
+        let image_indices = [present_image_index];
+
+        let present_info = vk::PresentInfoKHR::builder()
+            .wait_semaphores(&wait_semaphores)
+            .swapchains(&swapchains)
+            .image_indices(&image_indices)
+            .build();
+
+        let result = unsafe {
+            vkcontext.loaders.swapchain.queue_present(vkcontext.present_queue, &present_info)
+        };
+
+        match result {
+            Ok(true) => return true,
+            Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+                log::debug!("Swapchain out of date.");
+                self.out_of_date = true;
+            },
+            Err(error) => panic!("Failed to present swapchain: {}", error),
+            _ => {}
+        }
+
+        false
     }
 }
 
@@ -152,10 +215,10 @@ impl SwapchainSupportDetails {
         }
     }
 
-    pub fn get_ideal_swapchain_properties(&self, preferred_dimensions: [u32; 2]) -> SwapchainProperties {
+    pub fn get_ideal_swapchain_properties(&self) -> SwapchainProperties {
         let format = Self::choose_swapchain_surface_format(&self.formats);
         let present_mode = Self::choose_swapchain_surface_present_mode(&self.present_modes);
-        let extent = Self::choose_swapchain_extent(self.capabilities, preferred_dimensions);
+        let extent = Self::choose_swapchain_extent(self.capabilities);
 
         SwapchainProperties {
             format,
@@ -191,16 +254,8 @@ impl SwapchainSupportDetails {
         }
     }
 
-    fn choose_swapchain_extent(capabilities: vk::SurfaceCapabilitiesKHR, preferred_dimensions: [u32; 2]) -> vk::Extent2D {
-        if capabilities.current_extent.width != std::u32::MAX {
-            return capabilities.current_extent;
-        }
-
-        let min = capabilities.min_image_extent;
-        let max = capabilities.max_image_extent;
-        let width = preferred_dimensions[0].min(max.width).max(min.width);
-        let height = preferred_dimensions[1].min(max.height).max(min.height);
-        vk::Extent2D { width, height }
+    fn choose_swapchain_extent(capabilities: vk::SurfaceCapabilitiesKHR) -> vk::Extent2D {
+        capabilities.current_extent
     }
 
 }

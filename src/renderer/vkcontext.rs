@@ -10,6 +10,8 @@ use super::debug::*;
 
 pub struct VkContext {
     pub queue_family_indices: QueueFamilyIndices,
+    pub present_queue: vk::Queue,
+    pub graphics_queue: vk::Queue,
     pub device: Device,
     pub physical_device: vk::PhysicalDevice,
     pub surface_khr: vk::SurfaceKHR,
@@ -42,14 +44,16 @@ impl VkContext {
         let (physical_device, queue_family_indices) =
             Self::pick_physical_device(&instance, &surface_loader, surface_khr);
 
-        let (device, _graphics_queue, _present_queue) = 
+        let (device, graphics_queue, present_queue) = 
             Self::create_logical_device_with_graphics_queue(&instance, physical_device, queue_family_indices);
 
         let swapchain_loader = Swapchain::new(&instance, &device);
 
         VkContext {
-            device,
             queue_family_indices,
+            present_queue,
+            graphics_queue,
+            device,
             debug_report_callback,
             surface_khr,
             physical_device,
@@ -62,7 +66,7 @@ impl VkContext {
         }
     }
 
-    pub fn free(&mut self) {
+    pub fn destroy(&mut self) {
         unsafe {
             self.device.destroy_device(None);
             self.loaders.surface.destroy_surface(self.surface_khr, None);
@@ -72,7 +76,15 @@ impl VkContext {
             self.instance.destroy_instance(None);
         }
     }
+}
 
+impl VkContext {
+    pub fn wait_gpu_idle(&self) {
+        unsafe { self.device.device_wait_idle().unwrap(); }
+    }
+}
+
+impl VkContext {
     fn create_instance(entry: &Entry, window: &Window) -> Instance {
         let app_name = CString::new("Industria").unwrap();
         let engine_name = CString::new("No Engine").unwrap();
@@ -255,10 +267,16 @@ impl VkContext {
             .sampler_anisotropy(true)
             .build();
 
+        let mut vk11_device_features = vk::PhysicalDeviceVulkan11Features::builder()
+            .storage_buffer16_bit_access(true)
+            .uniform_and_storage_buffer16_bit_access(true)
+            .build();
+
         let device_create_info = vk::DeviceCreateInfo::builder()
             .queue_create_infos(&queue_create_infos)
             .enabled_extension_names(&device_extensions_ptrs)
             .enabled_features(&device_features)
+            .push_next(&mut vk11_device_features)
             .build();
 
         let device = unsafe {
