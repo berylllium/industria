@@ -10,14 +10,16 @@ use ash::{vk, Device};
 
 use swapchain::Swapchain;
 use vkcontext::VkContext;
+use command_buffer::CommandBuffer;
+use shader::VoxelShader;
 
 use winit::window::Window;
-
-use self::shader::VoxelShader;
 
 const MAX_FRAMES_IN_FLIGHT: u32 = 2;
 
 pub struct Renderer {
+    command_buffers: Vec<CommandBuffer>,
+
     voxel_shader: VoxelShader,
 
     current_frame: u64,
@@ -74,7 +76,14 @@ impl Renderer {
         let voxel_shader =
             VoxelShader::new(&vk_context, swapchain.images.len() as u32);
 
+        voxel_shader.update_color_buffer_descriptors(&vk_context, &swapchain);
+        
+        let command_buffers = (0..swapchain.images.len()).map(|_| {
+            CommandBuffer::new(&vk_context, command_pool, true)
+        }).collect::<Vec<_>>();
+
         Renderer {
+            command_buffers,
             voxel_shader,
             current_frame: 0,
             sync_objects,

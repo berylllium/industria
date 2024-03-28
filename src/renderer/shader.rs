@@ -1,6 +1,6 @@
 use ash::vk;
 use std::ffi::CString;
-use super::{command_buffer::CommandBuffer, pipeline::Pipeline, swapchain::{self, Swapchain}, vkcontext::VkContext};
+use super::{command_buffer::CommandBuffer, pipeline::Pipeline, swapchain::Swapchain, vkcontext::VkContext};
 use crate::container::FreeList;
 
 pub struct VoxelShader {
@@ -204,7 +204,28 @@ impl VoxelShader {
     }
 
     pub fn update_color_buffer_descriptors(&self, vkcontext: &VkContext, swapchain: &Swapchain) {
-
+        let image_infos = swapchain.image_views.iter()
+            .map(|image_view| {
+                vk::DescriptorImageInfo::builder()
+                    .image_layout(vk::ImageLayout::GENERAL)
+                    .image_view(*image_view)
+                    .sampler(vk::Sampler::null())
+                    .build()
+            })
+            .collect::<Vec<_>>();
+        
+        let write_ops = self.global_sets.iter().enumerate()
+            .map(|(i, set)| {
+                vk::WriteDescriptorSet::builder()
+                    .dst_set(*set)
+                    .dst_binding(0)
+                    .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                    .image_info(&image_infos[i..=i])
+                    .build()
+            })
+            .collect::<Vec<_>>();
+        
+        unsafe { vkcontext.device.update_descriptor_sets(&write_ops, &[]); }
     }
 }
 
